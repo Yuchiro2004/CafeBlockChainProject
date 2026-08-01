@@ -17,11 +17,11 @@ const CONTRACT_ABI = [
 // Rewards catalog is UI-only (off-chain business logic). Redeeming an item just
 // calls the on-chain redeem(amount) with that item's point cost.
 const REWARDS_MENU = [
-  { id: "espresso",    name: "Espresso",         desc: "A single shot, straight up.",        cost: 5,  icon: "☕" },
-  { id: "latte",       name: "Latte",            desc: "Espresso with steamed milk.",        cost: 8,  icon: "🥛" },
-  { id: "cappuccino",  name: "Cappuccino",       desc: "Equal parts espresso, milk, foam.",  cost: 8,  icon: "🫧" },
-  { id: "croissant",   name: "Croissant",        desc: "Buttery, flaky, fresh baked.",        cost: 6,  icon: "🥐" },
-  { id: "combo",       name: "Coffee + Pastry",  desc: "Any drink with a croissant.",         cost: 12, icon: "🎁" },
+  { id: "espresso",    name: "Espresso",         desc: "A single shot, straight up.",        cost: 30,  icon: "☕" },
+  { id: "latte",       name: "Latte",            desc: "Espresso with steamed milk.",        cost: 50,  icon: "🥛" },
+  { id: "cappuccino",  name: "Cappuccino",       desc: "Equal parts espresso, milk, foam.",  cost: 80,  icon: "🫧" },
+  { id: "croissant",   name: "Croissant",        desc: "Buttery, flaky, fresh baked.",        cost: 60,  icon: "🥐" },
+  { id: "combo",       name: "Coffee + Pastry",  desc: "Any drink with a croissant.",         cost: 120, icon: "🎁" },
 ];
 
 const iface = new ethers.Interface(CONTRACT_ABI);
@@ -211,23 +211,23 @@ function loyaltyApp() {
     },
 
     // Custom amount redeem, kept for flexibility/testing outside the catalog.
-    async redeemPoints() {
-      this.redeemStatus = { type: "pending", msg: "" };
-      this.redeeming = true;
-      try {
-        const amount = this.redeemAmount;
-        this.redeemStatus = { type: "pending", msg: "Transaction sent, waiting for confirmation..." };
-        await this.sendTx("redeem", [amount]);
-        const balResult = await this.ethCall("balanceOf", [this.account]);
-        this.balance = balResult[0].toString();
-        this.redeemStatus = { type: "ok", msg: `Redeemed ${amount} points.` };
-        this.redeemAmount = "";
-      } catch (err) {
-        this.redeemStatus = { type: "err", msg: this.parseError(err) };
-      } finally {
-        this.redeeming = false;
-      }
-    },
+    // async redeemPoints() {
+    //   this.redeemStatus = { type: "pending", msg: "" };
+    //   this.redeeming = true;
+    //   try {
+    //     const amount = this.redeemAmount;
+    //     this.redeemStatus = { type: "pending", msg: "Transaction sent, waiting for confirmation..." };
+    //     await this.sendTx("redeem", [amount]);
+    //     const balResult = await this.ethCall("balanceOf", [this.account]);
+    //     this.balance = balResult[0].toString();
+    //     this.redeemStatus = { type: "ok", msg: `Redeemed ${amount} points.` };
+    //     this.redeemAmount = "";
+    //   } catch (err) {
+    //     this.redeemStatus = { type: "err", msg: this.parseError(err) };
+    //   } finally {
+    //     this.redeeming = false;
+    //   }
+    // },
 
     shortAddr(a) {
       if (!a) return "";
