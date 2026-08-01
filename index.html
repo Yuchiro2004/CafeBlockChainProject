@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Loyalty Point DApp</title>
+<title>Stamp — Loyalty Rewards</title>
 <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
 <script src="script.js"></script>
@@ -12,7 +12,10 @@
 <body x-data="loyaltyApp()" x-init="init()">
 
   <header>
-    <h1>Loyalty<span>Point</span></h1>
+    <div class="brand">
+      <div class="brand-mark">☕</div>
+      <h1>Stamp<span>Loyalty Rewards</span></h1>
+    </div>
     <template x-if="!connected">
       <div class="row">
         <button class="btn btn-primary" @click="connect()">Connect Wallet</button>
@@ -33,11 +36,11 @@
 
     <template x-if="!connected">
       <div class="center">
-        <p x-show="!globalError">Connect your wallet to continue.</p>
-        <div class="status err" x-show="globalError" x-text="globalError" style="max-width:420px;margin:0 auto;text-align:left;"></div>
+        <p x-show="!globalError">Connect your wallet to see your points and rewards.</p>
+        <div class="status err" x-show="globalError" x-text="globalError" style="max-width:440px;margin:0 auto;text-align:left;"></div>
         <template x-if="!hasInjectedWallet">
-          <div class="status pending" style="max-width:420px;margin:12px auto 0;text-align:left;">
-            Preview demo mode uses a “read-only” placeholder account so the screen still renders in the editor.
+          <div class="status pending" style="max-width:440px;margin:12px auto 0;text-align:left;">
+            Preview demo mode uses a read-only placeholder account so the screen still renders in the editor.
           </div>
         </template>
       </div>
@@ -54,12 +57,12 @@
         <template x-if="isOwner">
           <div>
             <div class="card">
-              <h2>Give Loyalty Points (Mint)</h2>
+              <h2>Give Loyalty Points</h2>
               <label>Customer address</label>
               <input type="text" x-model="mintTo" placeholder="0x...">
               <label>Amount</label>
               <input type="number" x-model="mintAmount" min="1" placeholder="e.g. 10">
-              <button class="btn btn-primary" :disabled="minting" @click="mintPoints()">
+              <button class="btn btn-primary btn-block" :disabled="minting" @click="mintPoints()">
                 <span x-text="minting ? 'Sending...' : 'Give Points'"></span>
               </button>
               <div class="status" :class="mintStatus.type" x-show="mintStatus.msg" x-text="mintStatus.msg"></div>
@@ -67,11 +70,31 @@
 
             <div class="card">
               <h2>Contract Control</h2>
-              <button class="btn" :class="paused ? 'btn-primary' : 'btn-danger'"
+              <button class="btn btn-block" :class="paused ? 'btn-primary' : 'btn-danger'"
                       :disabled="pausing" @click="togglePause()">
                 <span x-text="pausing ? 'Processing...' : (paused ? 'Unpause Contract' : 'Pause Contract')"></span>
               </button>
               <div class="status" :class="pauseStatus.type" x-show="pauseStatus.msg" x-text="pauseStatus.msg"></div>
+            </div>
+
+            <div class="card">
+              <h2>Points Given History</h2>
+              <template x-if="loadingMintHistory && mintHistory.length === 0">
+                <p class="history-empty">Loading history...</p>
+              </template>
+              <template x-if="!loadingMintHistory && mintHistory.length === 0">
+                <p class="history-empty">No points given yet.</p>
+              </template>
+              <div class="history-list">
+                <template x-for="entry in mintHistory" :key="entry.txHash + entry.to">
+                  <div class="history-row">
+                    <div>
+                      <p class="history-main" x-text="'+' + entry.amount + ' pts → ' + shortAddr(entry.to)"></p>
+                      <p class="history-sub" x-text="'Block #' + entry.blockNumber + ' · ' + shortHash(entry.txHash)"></p>
+                    </div>
+                  </div>
+                </template>
+              </div>
             </div>
           </div>
         </template>
@@ -80,22 +103,90 @@
         <template x-if="!isOwner">
           <div>
             <div class="card">
-              <h2>Your Balance</h2>
-              <div class="balance"><span x-text="balance"></span> <small>points</small></div>
+              <h2>Your Punch Card</h2>
+              <div class="balance-row">
+                <p class="balance" x-text="balance"></p>
+                <small>points</small>
+              </div>
+              <!-- <div class="punchcard">
+                <template x-for="i in Math.min(Number(balance) || 0, 10)" :key="'f'+i">
+                  <div class="stamp filled">☕</div>
+                </template>
+                <template x-for="i in Math.max(0, 10 - (Number(balance) || 0))" :key="'e'+i">
+                  <div class="stamp"></div>
+                </template>
+              </div> -->
+              <!-- <div class="overflow-tag" x-show="Number(balance) > 10" x-text="'+ ' + (Number(balance) - 10) + ' more on your next card'"></div> -->
             </div>
 
             <div class="card">
-              <h2>Redeem Points</h2>
-              <label>Amount to redeem</label>
-              <input type="number" x-model="redeemAmount" min="1" :max="balance" placeholder="e.g. 5">
-              <button class="btn btn-primary" :disabled="redeeming || paused" @click="redeemPoints()">
-                <span x-text="redeeming ? 'Redeeming...' : 'Redeem'"></span>
-              </button>
-              <div class="status" :class="redeemStatus.type" x-show="redeemStatus.msg" x-text="redeemStatus.msg"></div>
+              <h2>Redeem for a Reward</h2>
 
-              <template x-if="showReward">
-                <div class="reward">🎉 Reward unlocked! Show this screen to the shop to claim it.</div>
+              <div class="menu-grid">
+                <template x-for="item in rewardsMenu" :key="item.id">
+                  <div class="menu-item" :class="{ locked: Number(balance) < item.cost }">
+                    <div class="menu-icon" x-text="item.icon"></div>
+                    <p class="menu-name" x-text="item.name"></p>
+                    <p class="menu-desc" x-text="item.desc"></p>
+                    <div class="menu-footer">
+                      <span class="menu-cost" x-text="item.cost + ' pts'"></span>
+                      <button class="menu-btn"
+                              :disabled="paused || Number(balance) < item.cost || redeemingItemId"
+                              @click="redeemItem(item)">
+                        <span x-text="redeemingItemId === item.id ? '...' : 'Redeem'"></span>
+                      </button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
+              <div class="status" :class="itemStatus.type" x-show="itemStatus.msg" x-text="itemStatus.msg"></div>
+
+              <template x-if="lastReward">
+                <div class="ticket">
+                  <div class="ticket-notch left"></div>
+                  <div class="ticket-notch right"></div>
+                  <p class="ticket-icon" x-text="lastReward.icon"></p>
+                  <p class="ticket-title" x-text="lastReward.name + ' unlocked!'"></p>
+                  <p class="ticket-sub">Show this screen at the counter to claim it.</p>
+                </div>
               </template>
+
+              <!-- <div class="custom-toggle">
+                <button class="btn-ghost" @click="showCustom = !showCustom" x-text="showCustom ? 'Hide custom redeem' : 'Redeem a custom amount instead'"></button>
+              </div> -->
+
+              <template x-if="showCustom">
+                <div class="custom-panel">
+                  <label>Amount to redeem</label>
+                  <input type="number" x-model="redeemAmount" min="1" :max="balance" placeholder="e.g. 5">
+                  <button class="btn btn-primary btn-block" :disabled="redeeming || paused" @click="redeemPoints()">
+                    <span x-text="redeeming ? 'Redeeming...' : 'Redeem Amount'"></span>
+                  </button>
+                  <div class="status" :class="redeemStatus.type" x-show="redeemStatus.msg" x-text="redeemStatus.msg"></div>
+                </div>
+              </template>
+            </div>
+
+            <div class="card">
+              <h2>Redeem History</h2>
+              <template x-if="loadingRedeemHistory && redeemHistory.length === 0">
+                <p class="history-empty">Loading history...</p>
+              </template>
+              <template x-if="!loadingRedeemHistory && redeemHistory.length === 0">
+                <p class="history-empty">You haven't redeemed anything yet.</p>
+              </template>
+              <div class="history-list">
+                <template x-for="entry in redeemHistory" :key="entry.txHash">
+                  <div class="history-row">
+                    <div class="history-icon" x-text="entry.itemIcon"></div>
+                    <div>
+                      <p class="history-main" x-text="entry.itemName + ' · -' + entry.amount + ' pts'"></p>
+                      <p class="history-sub" x-text="'Block #' + entry.blockNumber + ' · ' + shortHash(entry.txHash)"></p>
+                    </div>
+                  </div>
+                </template>
+              </div>
             </div>
           </div>
         </template>
@@ -103,7 +194,6 @@
     </template>
 
   </main>
-
 
 </body>
 </html>
