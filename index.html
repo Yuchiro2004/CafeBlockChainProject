@@ -88,6 +88,15 @@
                 <p class="balance" x-text="balance"></p>
                 <small>points</small>
               </div>
+              <!-- <div class="punchcard">
+                <template x-for="i in Math.min(Number(balance) || 0, 10)" :key="'f'+i">
+                  <div class="stamp filled">☕</div>
+                </template>
+                <template x-for="i in Math.max(0, 10 - (Number(balance) || 0))" :key="'e'+i">
+                  <div class="stamp"></div>
+                </template>
+              </div> -->
+              <!-- <div class="overflow-tag" x-show="Number(balance) > 10" x-text="'+ ' + (Number(balance) - 10) + ' more on your next card'"></div> -->
             </div>
 
             <div class="card">
@@ -119,6 +128,11 @@
                   <p class="reward-sub">Show this screen at the counter to claim it.</p>
                 </div>
               </template>
+
+              <!-- <div class="custom-toggle">
+                <button class="btn-ghost" @click="showCustom = !showCustom" x-text="showCustom ? 'Hide custom redeem' : 'Redeem a custom amount instead'"></button>
+              </div> -->
+
               <template x-if="showCustom">
                 <div class="custom-panel">
                   <label>Amount to redeem</label>
