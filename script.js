@@ -1,4 +1,4 @@
-const CONTRACT_ADDRESS = "0xA52bd32fdF1B6A8850a9F1D57b6D9C73F935Ea69";
+const CONTRACT_ADDRESS = "0xa611cdd4948233602353d6708a1f3edfa05b4ebf";
 const CONTRACT_ABI = [
   "function owner() view returns (address)",
   "function paused() view returns (bool)",
@@ -13,10 +13,24 @@ const CONTRACT_ABI = [
   "event PointsRedeemed(address indexed customer, uint256 amount)",
   "event Transfer(address indexed from, address indexed to, uint256 value)"
 ];
-// Redeeming this many points or more shows a "reward unlocked" banner (UI-only, no on-chain logic)
-const REWARD_THRESHOLD = 5;
+
+// Rewards catalog is UI-only (off-chain business logic). Redeeming an item just
+// calls the on-chain redeem(amount) with that item's point cost.
+const REWARDS_MENU = [
+  { id: "espresso",    name: "Espresso",         desc: "A single shot, straight up.",        cost: 30,  icon: "☕" },
+  { id: "latte",       name: "Latte",            desc: "Espresso with steamed milk.",        cost: 50,  icon: "🥛" },
+  { id: "cappuccino",  name: "Cappuccino",       desc: "Equal parts espresso, milk, foam.",  cost: 80,  icon: "🫧" },
+  { id: "croissant",   name: "Croissant",        desc: "Buttery, flaky, fresh baked.",        cost: 60,  icon: "🥐" },
+  { id: "combo",       name: "Coffee + Pastry",  desc: "Any drink with a croissant.",         cost: 120, icon: "🎁" },
+];
 
 const iface = new ethers.Interface(CONTRACT_ABI);
+
+// How far back (in blocks) to search when loading history. Public RPC endpoints
+// often refuse eth_getLogs over very large ranges, so we look back a bounded
+// window instead of scanning from block 0. ~50,000 blocks is roughly a week on
+// most testnets — raise it if you need older history and your RPC allows it.
+const LOG_LOOKBACK_BLOCKS = 50000;
 
 function loyaltyApp() {
   return {
@@ -31,13 +45,25 @@ function loyaltyApp() {
     minting: false,
     pausing: false,
     redeeming: false,
-    showReward: false,
     mintStatus: { type: "", msg: "" },
     pauseStatus: { type: "", msg: "" },
     redeemStatus: { type: "", msg: "" },
     globalError: "",
     hasInjectedWallet: false,
     demoMode: false,
+
+    // Rewards catalog state
+    rewardsMenu: REWARDS_MENU,
+    redeemingItemId: null,
+    itemStatus: { type: "", msg: "" },
+    lastReward: null,
+    showCustom: false,
+
+    // History state
+    mintHistory: [],
+    loadingMintHistory: false,
+    redeemHistory: [],
+    loadingRedeemHistory: false,
 
     async init() {
       this.hasInjectedWallet = Boolean(window.ethereum);
@@ -91,6 +117,7 @@ function loyaltyApp() {
       this.isOwner = false;
       this.balance = "0";
       this.demoMode = false;
+      this.lastReward = null;
     },
 
     // ---- Raw JSON-RPC helpers (bypass ethers Provider/Contract/Signer classes) ----
@@ -126,6 +153,82 @@ function loyaltyApp() {
       }
     },
 
+    // ---- History (reads past events straight off the chain — no backend/database needed) ----
+    async getPastBlockRange() {
+      const latestHex = await window.ethereum.request({ method: "eth_blockNumber" });
+      const latest = parseInt(latestHex, 16);
+      const from = Math.max(0, latest - LOG_LOOKBACK_BLOCKS);
+      return { fromBlock: "0x" + from.toString(16), toBlock: latestHex };
+    },
+
+    async fetchLogs(eventName, filterValues = []) {
+      const { fromBlock, toBlock } = await this.getPastBlockRange();
+      const topics = iface.encodeFilterTopics(eventName, filterValues);
+      const logs = await window.ethereum.request({
+        method: "eth_getLogs",
+        params: [{ address: CONTRACT_ADDRESS, fromBlock, toBlock, topics }]
+      });
+      return logs
+        .map((log) => {
+          try {
+            const parsed = iface.parseLog({ topics: log.topics, data: log.data });
+            return {
+              args: parsed.args,
+              blockNumber: parseInt(log.blockNumber, 16),
+              txHash: log.transactionHash
+            };
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean)
+        .reverse(); // most recent first
+    },
+
+    async loadMintHistory() {
+      this.loadingMintHistory = true;
+      try {
+        const events = await this.fetchLogs("PointsGiven");
+        this.mintHistory = events.map((e) => ({
+          to: e.args.to,
+          amount: e.args.amount.toString(),
+          blockNumber: e.blockNumber,
+          txHash: e.txHash
+        }));
+      } catch (err) {
+        console.error("loadMintHistory failed:", err);
+      } finally {
+        this.loadingMintHistory = false;
+      }
+    },
+
+    async loadRedeemHistory() {
+      this.loadingRedeemHistory = true;
+      try {
+        const events = await this.fetchLogs("PointsRedeemed", [this.account]);
+        this.redeemHistory = events.map((e) => {
+          const amount = e.args.amount.toString();
+          const item = REWARDS_MENU.find((m) => String(m.cost) === amount);
+          return {
+            amount,
+            itemName: item ? item.name : "Custom redeem",
+            itemIcon: item ? item.icon : "🔸",
+            blockNumber: e.blockNumber,
+            txHash: e.txHash
+          };
+        });
+      } catch (err) {
+        console.error("loadRedeemHistory failed:", err);
+      } finally {
+        this.loadingRedeemHistory = false;
+      }
+    },
+
+    shortHash(h) {
+      if (!h) return "";
+      return h.slice(0, 8) + "..." + h.slice(-6);
+    },
+
     async loadState() {
       const [ownerResult, pausedResult] = await Promise.all([
         this.ethCall("owner"),
@@ -137,6 +240,9 @@ function loyaltyApp() {
       if (!this.isOwner) {
         const balResult = await this.ethCall("balanceOf", [this.account]);
         this.balance = balResult[0].toString();
+        this.loadRedeemHistory();
+      } else {
+        this.loadMintHistory();
       }
     },
 
@@ -149,6 +255,7 @@ function loyaltyApp() {
         this.mintStatus = { type: "ok", msg: `Gave ${this.mintAmount} points to ${this.shortAddr(this.mintTo)}` };
         this.mintTo = "";
         this.mintAmount = "";
+        this.loadMintHistory();
       } catch (err) {
         this.mintStatus = { type: "err", msg: this.parseError(err) };
       } finally {
@@ -170,9 +277,36 @@ function loyaltyApp() {
       }
     },
 
+    // Redeem points for a catalog item (e.g. a coffee or pastry). This is the
+    // main customer flow — the item's cost is just passed to the same
+    // on-chain redeem(amount) function used everywhere else.
+    async redeemItem(item) {
+      if (this.redeemingItemId) return;
+      if (Number(this.balance) < item.cost) {
+        this.itemStatus = { type: "err", msg: `You need ${item.cost} points for ${item.name}. You have ${this.balance}.` };
+        return;
+      }
+      this.redeemingItemId = item.id;
+      this.itemStatus = { type: "pending", msg: `Redeeming for ${item.name}, waiting for confirmation...` };
+      this.lastReward = null;
+      try {
+        await this.sendTx("redeem", [item.cost]);
+        const balResult = await this.ethCall("balanceOf", [this.account]);
+        this.balance = balResult[0].toString();
+        this.itemStatus = { type: "ok", msg: `Redeemed ${item.cost} points for ${item.name}.` };
+        this.lastReward = item;
+        this.fireConfetti();
+        this.loadRedeemHistory();
+      } catch (err) {
+        this.itemStatus = { type: "err", msg: this.parseError(err) };
+      } finally {
+        this.redeemingItemId = null;
+      }
+    },
+
+    // Custom amount redeem, kept for flexibility/testing outside the catalog.
     async redeemPoints() {
       this.redeemStatus = { type: "pending", msg: "" };
-      this.showReward = false;
       this.redeeming = true;
       try {
         const amount = this.redeemAmount;
@@ -181,8 +315,8 @@ function loyaltyApp() {
         const balResult = await this.ethCall("balanceOf", [this.account]);
         this.balance = balResult[0].toString();
         this.redeemStatus = { type: "ok", msg: `Redeemed ${amount} points.` };
-        if (Number(amount) >= REWARD_THRESHOLD) this.showReward = true;
         this.redeemAmount = "";
+        this.loadRedeemHistory();
       } catch (err) {
         this.redeemStatus = { type: "err", msg: this.parseError(err) };
       } finally {
@@ -193,6 +327,61 @@ function loyaltyApp() {
     shortAddr(a) {
       if (!a) return "";
       return a.slice(0, 6) + "..." + a.slice(-4);
+    },
+
+    // Small canvas-based confetti burst in the shop's brass/brick palette.
+    // No external library — a self-removing overlay canvas animated with rAF.
+    fireConfetti() {
+      const canvas = document.createElement("canvas");
+      canvas.style.position = "fixed";
+      canvas.style.inset = "0";
+      canvas.style.width = "100vw";
+      canvas.style.height = "100vh";
+      canvas.style.pointerEvents = "none";
+      canvas.style.zIndex = "9999";
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      document.body.appendChild(canvas);
+      const ctx = canvas.getContext("2d");
+
+      const colors = ["#c99a4b", "#e8c274", "#b1503a", "#e2a08c", "#f1e4cf"];
+      const pieces = Array.from({ length: 80 }, () => ({
+        x: canvas.width / 2 + (Math.random() - 0.5) * 120,
+        y: canvas.height * 0.35 + (Math.random() - 0.5) * 40,
+        vx: (Math.random() - 0.5) * 9,
+        vy: Math.random() * -9 - 3,
+        size: Math.random() * 7 + 4,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        rot: Math.random() * Math.PI * 2,
+        vr: (Math.random() - 0.5) * 0.3,
+        gravity: 0.28 + Math.random() * 0.1
+      }));
+
+      const start = performance.now();
+      const duration = 2200;
+
+      function frame(now) {
+        const elapsed = now - start;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        for (const p of pieces) {
+          p.vy += p.gravity;
+          p.x += p.vx;
+          p.y += p.vy;
+          p.rot += p.vr;
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.rot);
+          ctx.fillStyle = p.color;
+          ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+          ctx.restore();
+        }
+        if (elapsed < duration) {
+          requestAnimationFrame(frame);
+        } else {
+          canvas.remove();
+        }
+      }
+      requestAnimationFrame(frame);
     },
 
     parseError(err) {
