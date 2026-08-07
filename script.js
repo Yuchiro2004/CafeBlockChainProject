@@ -1,4 +1,4 @@
-const CONTRACT_ADDRESS = "0xA52bd32fdF1B6A8850a9F1D57b6D9C73F935Ea69";
+const CONTRACT_ADDRESS = "0xa611cdd4948233602353d6708a1f3edfa05b4ebf";
 const CONTRACT_ABI = [
   "function owner() view returns (address)",
   "function paused() view returns (bool)",
@@ -13,8 +13,16 @@ const CONTRACT_ABI = [
   "event PointsRedeemed(address indexed customer, uint256 amount)",
   "event Transfer(address indexed from, address indexed to, uint256 value)"
 ];
-// Redeeming this many points or more shows a "reward unlocked" banner (UI-only, no on-chain logic)
-const REWARD_THRESHOLD = 5;
+
+// Rewards catalog is UI-only (off-chain business logic). Redeeming an item just
+// calls the on-chain redeem(amount) with that item's point cost.
+const REWARDS_MENU = [
+  { id: "espresso",    name: "Espresso",         desc: "A single shot, straight up.",        cost: 30,  icon: "☕" },
+  { id: "latte",       name: "Latte",            desc: "Espresso with steamed milk.",        cost: 50,  icon: "🥛" },
+  { id: "cappuccino",  name: "Cappuccino",       desc: "Equal parts espresso, milk, foam.",  cost: 80,  icon: "🫧" },
+  { id: "croissant",   name: "Croissant",        desc: "Buttery, flaky, fresh baked.",        cost: 60,  icon: "🥐" },
+  { id: "combo",       name: "Coffee + Pastry",  desc: "Any drink with a croissant.",         cost: 120, icon: "🎁" },
+];
 
 const iface = new ethers.Interface(CONTRACT_ABI);
 
@@ -31,13 +39,19 @@ function loyaltyApp() {
     minting: false,
     pausing: false,
     redeeming: false,
-    showReward: false,
     mintStatus: { type: "", msg: "" },
     pauseStatus: { type: "", msg: "" },
     redeemStatus: { type: "", msg: "" },
     globalError: "",
     hasInjectedWallet: false,
     demoMode: false,
+
+    // Rewards catalog state
+    rewardsMenu: REWARDS_MENU,
+    redeemingItemId: null,
+    itemStatus: { type: "", msg: "" },
+    lastReward: null,
+    showCustom: false,
 
     async init() {
       this.hasInjectedWallet = Boolean(window.ethereum);
@@ -91,6 +105,7 @@ function loyaltyApp() {
       this.isOwner = false;
       this.balance = "0";
       this.demoMode = false;
+      this.lastReward = null;
     },
 
     // ---- Raw JSON-RPC helpers (bypass ethers Provider/Contract/Signer classes) ----
@@ -170,25 +185,49 @@ function loyaltyApp() {
       }
     },
 
-    async redeemPoints() {
-      this.redeemStatus = { type: "pending", msg: "" };
-      this.showReward = false;
-      this.redeeming = true;
+    // Redeem points for a catalog item (e.g. a coffee or pastry). This is the
+    // main customer flow — the item's cost is just passed to the same
+    // on-chain redeem(amount) function used everywhere else.
+    async redeemItem(item) {
+      if (this.redeemingItemId) return;
+      if (Number(this.balance) < item.cost) {
+        this.itemStatus = { type: "err", msg: `You need ${item.cost} points for ${item.name}. You have ${this.balance}.` };
+        return;
+      }
+      this.redeemingItemId = item.id;
+      this.itemStatus = { type: "pending", msg: `Redeeming for ${item.name}, waiting for confirmation...` };
+      this.lastReward = null;
       try {
-        const amount = this.redeemAmount;
-        this.redeemStatus = { type: "pending", msg: "Transaction sent, waiting for confirmation..." };
-        await this.sendTx("redeem", [amount]);
+        await this.sendTx("redeem", [item.cost]);
         const balResult = await this.ethCall("balanceOf", [this.account]);
         this.balance = balResult[0].toString();
-        this.redeemStatus = { type: "ok", msg: `Redeemed ${amount} points.` };
-        if (Number(amount) >= REWARD_THRESHOLD) this.showReward = true;
-        this.redeemAmount = "";
+        this.itemStatus = { type: "ok", msg: `Redeemed ${item.cost} points for ${item.name}.` };
+        this.lastReward = item;
       } catch (err) {
-        this.redeemStatus = { type: "err", msg: this.parseError(err) };
+        this.itemStatus = { type: "err", msg: this.parseError(err) };
       } finally {
-        this.redeeming = false;
+        this.redeemingItemId = null;
       }
     },
+
+    // Custom amount redeem, kept for flexibility/testing outside the catalog.
+    // async redeemPoints() {
+    //   this.redeemStatus = { type: "pending", msg: "" };
+    //   this.redeeming = true;
+    //   try {
+    //     const amount = this.redeemAmount;
+    //     this.redeemStatus = { type: "pending", msg: "Transaction sent, waiting for confirmation..." };
+    //     await this.sendTx("redeem", [amount]);
+    //     const balResult = await this.ethCall("balanceOf", [this.account]);
+    //     this.balance = balResult[0].toString();
+    //     this.redeemStatus = { type: "ok", msg: `Redeemed ${amount} points.` };
+    //     this.redeemAmount = "";
+    //   } catch (err) {
+    //     this.redeemStatus = { type: "err", msg: this.parseError(err) };
+    //   } finally {
+    //     this.redeeming = false;
+    //   }
+    // },
 
     shortAddr(a) {
       if (!a) return "";
